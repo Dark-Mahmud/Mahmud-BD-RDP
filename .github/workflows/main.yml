@@ -1,114 +1,360 @@
-
-name: RDP
+name: Ubuntu VPS - SSH via Tailscale
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 3600
+  setup-ubuntu-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Update System
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
-
-          # Remove any existing rule with the same name to avoid duplication
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          echo "System updated successfully"
           
-          # For testing, allow any incoming connection on port 3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Secure Password
+      - name: Create SSH User
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126)) # Special characters
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          # Generate secure password
+          SSH_PASSWORD=$(openssl rand -base64 20 | tr -d '/+' | cut -c1-16)
+          echo "SSH_PASSWORD=$SSH_PASSWORD" >> $GITHUB_ENV
+          echo "SSH_USER=vpsuser" >> $GITHUB_ENV
           
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          # Create user
+          sudo useradd -m -s /bin/bash vpsuser
+          echo "vpsuser:$SSH_PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo vpsuser
           
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-
+          # Create SSH directory
+          sudo mkdir -p /home/vpsuser/.ssh
+          sudo chown vpsuser:vpsuser /home/vpsuser/.ssh
+          sudo chmod 700 /home/vpsuser/.ssh
+          
+          echo "User created: vpsuser"
+          echo "Password set successfully"
+          
+      - name: Configure SSH Server
+        run: |
+          # Configure SSH for password authentication
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+          sudo sed -i 's/PermitRootLogin yes/PermitRootLogin no/g' /etc/ssh/sshd_config
+          
+          # Allow password authentication
+          sudo tee -a /etc/ssh/sshd_config > /dev/null << EOF
+          
+          # Custom settings
+          ClientAliveInterval 120
+          ClientAliveCountMax 3
+          X11Forwarding yes
+          EOF
+          
+          # Restart SSH service
+          sudo systemctl restart ssh
+          sudo systemctl enable ssh
+          
+          echo "SSH server configured successfully"
+          
+      - name: Install Basic Tools
+        run: |
+          sudo apt-get install -y \
+            curl \
+            wget \
+            git \
+            htop \
+            nano \
+            vim \
+            net-tools \
+            tree \
+            zip \
+            unzip \
+            python3 \
+            python3-pip \
+            build-essential
+          
+          echo "Basic tools installed successfully"
+          
+      - name: Configure Firewall
+        run: |
+          # Install UFW if not installed
+          sudo apt-get install -y ufw
+          
+          # Configure firewall
+          echo "y" | sudo ufw --force enable
+          sudo ufw default deny incoming
+          sudo ufw default allow outgoing
+          sudo ufw allow 22/tcp
+          sudo ufw --force enable
+          
+          echo "Firewall configured - SSH port 22 allowed"
+          
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
+          # Add Tailscale repository
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
           
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection
+          # Install Tailscale
+          sudo apt-get update
+          sudo apt-get install -y tailscale
+          
+          echo "Tailscale installed successfully"
+          
+      - name: Setup Tailscale Connection
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          # Check if auth key is provided
+          if [ -z "$TAILSCALE_AUTH_KEY" ]; then
+            echo "ERROR: TAILSCALE_AUTH_KEY secret is not set"
+            echo "Please add your Tailscale auth key to GitHub Secrets"
+            echo "Go to: Repository Settings → Secrets and variables → Actions"
+            exit 1
+          fi
           
-          # Wait for Tailscale to assign an IP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
+          # Start Tailscale
+          echo "Starting Tailscale..."
+          sudo tailscale up --authkey=$TAILSCALE_AUTH_KEY \
+            --hostname=github-vps-${{ github.run_id }} \
+            --accept-routes \
+            --ssh
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      
-      - name: Verify RDP Accessibility
+          # Wait and get IP
+          echo "Waiting for Tailscale IP..."
+          sleep 10
+          
+          # Get Tailscale IP
+          TS_IP=$(sudo tailscale ip -4)
+          
+          if [ -z "$TS_IP" ]; then
+            echo "Trying again to get Tailscale IP..."
+            sleep 10
+            TS_IP=$(sudo tailscale ip -4)
+          fi
+          
+          if [ -z "$TS_IP" ]; then
+            echo "ERROR: Could not get Tailscale IP"
+            echo "Checking Tailscale status..."
+            sudo tailscale status
+            exit 1
+          fi
+          
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "✅ Tailscale connected successfully!"
+          echo "Tailscale IP: $TS_IP"
+          
+      - name: Install Docker
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          # Install Docker
+          curl -fsSL https://get.docker.com | sh
           
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
-
-      - name: Maintain Connection
+          # Add user to docker group
+          sudo usermod -aG docker vpsuser
+          
+          # Install Docker Compose
+          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+            -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          
+          echo "Docker and Docker Compose installed successfully"
+          
+      - name: Install Node.js
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
+          # Install Node.js 20.x (LTS)
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
           
-          # Keep runner active indefinitely (or until manually cancelled)
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          echo "Node.js $(node --version) installed"
+          
+      - name: Setup User Environment
+        run: |
+          # Create .bashrc with aliases
+          cat > /tmp/bashrc_setup << 'EOF'
+          # Aliases
+          alias ll='ls -la'
+          alias la='ls -A'
+          alias l='ls -CF'
+          alias ..='cd ..'
+          alias ...='cd ../..'
+          alias h='history'
+          alias ports='netstat -tulpn'
+          alias update='sudo apt update && sudo apt upgrade -y'
+          alias clean='sudo apt autoremove -y && sudo apt autoclean'
+          
+          # Docker aliases
+          alias dps='docker ps'
+          alias dpa='docker ps -a'
+          alias dim='docker images'
+          alias dcu='docker-compose up'
+          alias dcd='docker-compose down'
+          
+          # Git aliases
+          alias gs='git status'
+          alias ga='git add'
+          alias gc='git commit -m'
+          alias gp='git push'
+          alias gl='git log --oneline --graph --all'
+          
+          # Color prompt
+          export PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+          
+          # Default editor
+          export EDITOR=nano
+          
+          # Add to PATH
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          # Welcome message
+          echo ""
+          echo "Welcome to your GitHub VPS!"
+          echo "Connected via Tailscale"
+          echo "Run 'sysinfo' for system information"
+          echo ""
+          EOF
+          
+          # Copy to user's home
+          sudo cp /tmp/bashrc_setup /home/vpsuser/.bashrc
+          sudo chown vpsuser:vpsuser /home/vpsuser/.bashrc
+          
+          # Create sysinfo script
+          cat > /tmp/sysinfo << 'EOF'
+          #!/bin/bash
+          echo ""
+          echo "╔══════════════════════════════════════╗"
+          echo "║        VPS SYSTEM INFORMATION        ║"
+          echo "╚══════════════════════════════════════╝"
+          echo ""
+          echo "📊 SYSTEM:"
+          echo "   Hostname: $(hostname)"
+          echo "   OS: $(lsb_release -ds)"
+          echo "   Kernel: $(uname -r)"
+          echo ""
+          echo "⏱️  UPTIME:"
+          echo "   $(uptime -p)"
+          echo "   Load: $(uptime | awk -F'load average:' '{print $2}')"
+          echo ""
+          echo "💾 RESOURCES:"
+          echo "   Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2 " (" $4 " free)"}')"
+          echo "   Disk: $(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 " used)"}')"
+          echo ""
+          echo "🌐 NETWORK:"
+          echo "   Tailscale IP: $(tailscale ip -4 2>/dev/null || echo 'Not connected')"
+          echo "   Public IP: $(curl -s ifconfig.me || echo 'Unknown')"
+          echo ""
+          echo "🐋 DOCKER:"
+          echo "   Containers: $(docker ps -q 2>/dev/null | wc -l || echo '0') running"
+          echo "   Version: $(docker --version 2>/dev/null | cut -d' ' -f3- || echo 'Not installed')"
+          echo ""
+          echo "📦 PACKAGES:"
+          echo "   Node: $(node --version 2>/dev/null || echo 'Not installed')"
+          echo "   NPM: $(npm --version 2>/dev/null || echo 'Not installed')"
+          echo "   Python: $(python3 --version 2>/dev/null || echo 'Not installed')"
+          echo "   Git: $(git --version 2>/dev/null | cut -d' ' -f3 || echo 'Not installed')"
+          echo ""
+          EOF
+          
+          # Make sysinfo executable and move to /usr/local/bin
+          sudo cp /tmp/sysinfo /usr/local/bin/sysinfo
+          sudo chmod +x /usr/local/bin/sysinfo
+          
+          echo "User environment configured successfully"
+          
+      - name: Final Configuration
+        run: |
+          # Setup welcome message
+          sudo tee /etc/motd > /dev/null << 'EOF'
+          ╔═══════════════════════════════════════════╗
+          ║    GitHub Actions Ubuntu VPS              ║
+          ║    Access via Tailscale VPN               ║
+          ║    Session active for 6 hours             ║
+          ╚═══════════════════════════════════════════╝
+          EOF
+          
+          # Clean up
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          
+          echo "Final configuration completed"
+          
+      - name: Display Connection Information
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║               🚀 VPS SETUP COMPLETE!                     ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "🔐 SSH CONNECTION DETAILS:"
+          echo "   ▸ Host: $TAILSCALE_IP"
+          echo "   ▸ Port: 22"
+          echo "   ▸ Username: $SSH_USER"
+          echo "   ▸ Password: $SSH_PASSWORD"
+          echo ""
+          echo "📡 CONNECTION COMMAND:"
+          echo "   ssh $SSH_USER@$TAILSCALE_IP"
+          echo ""
+          echo "📦 INSTALLED SOFTWARE:"
+          echo "   ✓ Ubuntu Server"
+          echo "   ✓ Docker & Docker Compose"
+          echo "   ✓ Node.js $(node --version)"
+          echo "   ✓ Python 3"
+          echo "   ✓ Git"
+          echo "   ✓ Essential tools"
+          echo "   ✓ Tailscale VPN"
+          echo ""
+          echo "⚡ QUICK COMMANDS (after login):"
+          echo "   sysinfo          - Show system information"
+          echo "   docker ps        - List containers"
+          echo "   tailscale status - Check VPN status"
+          echo ""
+          echo "⏰ SESSION INFO:"
+          echo "   This VPS will remain active for 6 hours"
+          echo "   All data is temporary and will be deleted"
+          echo ""
+          echo "🔗 TAILSCALE REQUIREMENTS:"
+          echo "   You need Tailscale installed on your local machine"
+          echo "   Download from: https://tailscale.com/download"
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║   VPS IS READY! Connect using the details above.        ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # Mask password in logs
+          echo "::add-mask::$SSH_PASSWORD"
+          
+      - name: Keep Session Active
+        run: |
+          echo "🟢 VPS is now running and accessible!"
+          echo "⏳ Session will remain active for 6 hours (360 minutes)"
+          echo "Press Ctrl+C in GitHub Actions to stop early"
+          echo ""
+          
+          # Display countdown
+          TOTAL_MINUTES=360
+          for ((minute=1; minute<=TOTAL_MINUTES; minute++)); do
+            remaining=$((TOTAL_MINUTES - minute))
+            hours=$((remaining / 60))
+            minutes=$((remaining % 60))
+            
+            # Show status every 5 minutes
+            if (( minute % 5 == 0 )); then
+              echo "[$(date '+%H:%M:%S')] VPS active - $remaining minutes remaining (~${hours}h ${minutes}m)"
+              
+              # Check Tailscale connection
+              if ! sudo tailscale status > /dev/null 2>&1; then
+                echo "⚠️  Tailscale disconnected - Reconnecting..."
+                sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --reset
+              fi
+              
+              # Show quick status
+              echo "   🖥️  Load: $(uptime | awk -F'load average:' '{print $2}')"
+              echo "   💾 Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+            fi
+            
+            sleep 60
+          done
+          
+          echo ""
+          echo "⏰ Session time limit reached (6 hours)"
+          echo "👋 VPS session ending. Goodbye!"
