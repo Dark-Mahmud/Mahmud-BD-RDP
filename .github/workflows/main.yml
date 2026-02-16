@@ -25,28 +25,51 @@ jobs:
           unzip -q ddoso.zip
           echo "📁 Extracted files:"
           ls -la
+          echo ""
+          echo "📁 Directory contents:"
+          ls -la */
       
       - name: Find app directory and run npm start
         run: |
-          # Find the app directory (ddosm or ddoso)
+          # List all directories to see what we have
+          echo "🔍 Available directories:"
+          ls -d */
+          
+          # Try different possible directory names (all lowercase)
           if [ -d "ddosm" ]; then
+            echo "✅ Found dDOSm directory"
             cd dDOSm
           elif [ -d "ddoso" ]; then
+            echo "✅ Found ddoso directory"
             cd ddoso
+          elif [ -d "ddos" ]; then
+            echo "✅ Found ddos directory"
+            cd ddos
           else
             # Look for any directory with package.json
-            APP_DIR=$(find . -name "package.json" -type f -exec dirname {} \; | head -1)
-            cd "$APP_DIR"
+            echo "🔍 Searching for directory with package.json..."
+            APP_DIR=$(find . -maxdepth 2 -name "package.json" -type f -exec dirname {} \; | head -1)
+            if [ -n "$APP_DIR" ]; then
+              echo "✅ Found app in: $APP_DIR"
+              cd "$APP_DIR"
+            else
+              echo "❌ No directory with package.json found"
+              exit 1
+            fi
           fi
           
           echo "📍 Working directory: $(pwd)"
-          echo "📄 package.json:"
+          echo "📄 Directory contents:"
+          ls -la
+          
+          echo ""
+          echo "📄 package.json contents:"
           cat package.json
           
-          # Install dependencies
+          echo ""
           echo "📦 Installing dependencies..."
           npm install --legacy-peer-deps
           
-          # Run npm start
+          echo ""
           echo "🚀 Running npm start..."
           npm start
