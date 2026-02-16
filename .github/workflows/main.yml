@@ -32,10 +32,10 @@ jobs:
           echo "🔍 Available directories:"
           ls -d */
           
-          # Your directory is 'ddosm' (all lowercase)
+          # Directory is 'ddosm' (all lowercase)
           if [ -d "ddosm" ]; then
-            echo "✅ Found dDOSm directory"
-            cd dDOSm
+            echo "✅ Found ddosm directory"
+            cd ddosm
             echo "📍 Working directory: $(pwd)"
             echo "📄 Directory contents:"
             ls -la
