@@ -26,31 +26,40 @@ jobs:
           echo "📁 Extracted files:"
           ls -la
       
-      - name: Find app directory and run npm start
+      - name: Find app directory and run npm start with keep-alive
         run: |
           # List all directories
           echo "🔍 Available directories:"
           ls -d */
           
-          # Directory is 'ddosm' (all lowercase)
           if [ -d "ddosm" ]; then
             echo "✅ Found ddosm directory"
             cd ddosm
             echo "📍 Working directory: $(pwd)"
-            echo "📄 Directory contents:"
-            ls -la
-            
-            echo ""
-            echo "📄 package.json contents:"
-            cat package.json
             
             echo ""
             echo "📦 Installing dependencies..."
             npm install --legacy-peer-deps
             
             echo ""
-            echo "🚀 Running npm start..."
-            npm start
+            echo "🚀 Running npm start with keep-alive..."
+            # Run npm start in background and keep the job alive
+            npm start &
+            
+            # Get the PID of the npm start process
+            NPM_PID=$!
+            
+            # Keep the job alive with periodic output
+            echo "Process started with PID: $NPM_PID"
+            
+            # Monitor loop to keep the job alive and check process status
+            while kill -0 $NPM_PID 2>/dev/null; do
+              echo "⏳ Application is running... $(date)"
+              sleep 60
+            done
+            
+            # Wait for the process to finish (if it does)
+            wait $NPM_PID
           else
             echo "❌ Directory 'ddosm' not found"
             exit 1
